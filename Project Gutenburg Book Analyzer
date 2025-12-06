@@ -1,1 +1,624 @@
+"""
+Project Gutenberg Book Analyzer
+A tool for searching, analyzing, and storing book word frequency data
+from the Project Gutenberg library of ebooks. 
 
+Author: Joey Zhen
+Date: December 5, 2025
+"""
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+import sqlite3
+import urllib.request
+import urllib.error
+import re
+from collections import Counter
+
+
+class GutenbergAnalyzer:
+    """
+    Main application class for the Project Gutenberg Book Analyzer.
+    Handles GUI creation, database operations, web scraping, and word frequency analysis.
+    """
+    
+    # List of common words to filter out
+    STOP_WORDS = {
+        'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 
+        'her', 'it', 'its', 'they', 'them', 'their', 'what', 'which', 'who', 
+        'this', 'that', 'these', 'those', 'am', 'is', 'are', 'was', 'were', 
+        'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 
+        'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'of', 
+        'at', 'by', 'for', 'with', 'about', 'into', 'through', 'to', 'from', 
+        'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'then', 
+        'there', 'when', 'where', 'why', 'how', 'all', 'each', 'more', 'most', 
+        'other', 'some', 'no', 'not', 'only', 'so', 'than', 'too', 'very', 
+        'can', 'will', 'just', 'should', 'now'
+    }
+    
+    def __init__(self, root):
+        """
+        Initialize the application with GUI components and database.
+        
+        Args:
+            root: The tkinter root window
+        """
+        self.root = root
+        self.root.title("Project Gutenberg Book Analyzer")
+        self.root.geometry("850x650")
+        
+        # Set dark theme colors
+        self.bg_color = '#1e1e1e'
+        self.fg_color = '#e0e0e0'
+        self.accent_color = '#0d7377'
+        self.button_color = '#14a085'
+        self.entry_bg = '#2d2d2d'
+        
+        # Configure root background
+        self.root.configure(bg=self.bg_color)
+        
+        # Initialize database
+        self.init_database()
+        
+        # Create GUI
+        self.create_gui()
+        
+    def init_database(self):
+        """
+        Initialize the SQLite database and create table if it doesn't exist.
+        Stores book titles and their top 10 most frequent words.
+        """
+        try:
+            self.conn = sqlite3.connect('gutenberg_books.db')
+            self.cursor = self.conn.cursor()
+            
+            # Check if table exists with old structure
+            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='books'")
+            table_exists = self.cursor.fetchone()
+            
+            if table_exists:
+                # Check if table has correct columns
+                self.cursor.execute("PRAGMA table_info(books)")
+                columns = [col[1] for col in self.cursor.fetchall()]
+                
+                # If old structure, drop and recreate
+                if 'word1' not in columns:
+                    self.cursor.execute("DROP TABLE books")
+                    self.conn.commit()
+            
+            # Create single table for books and word frequencies
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS books (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT UNIQUE NOT NULL,
+                    word1 TEXT, freq1 INTEGER,
+                    word2 TEXT, freq2 INTEGER,
+                    word3 TEXT, freq3 INTEGER,
+                    word4 TEXT, freq4 INTEGER,
+                    word5 TEXT, freq5 INTEGER,
+                    word6 TEXT, freq6 INTEGER,
+                    word7 TEXT, freq7 INTEGER,
+                    word8 TEXT, freq8 INTEGER,
+                    word9 TEXT, freq9 INTEGER,
+                    word10 TEXT, freq10 INTEGER
+                )
+            ''')
+            
+            self.conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Failed to initialize database: {e}")
+    
+    def create_gui(self):
+        """
+        Create the graphical user interface with all components.
+        Uses a dark theme with modern styling.
+        """
+        # Main container
+        main_frame = tk.Frame(self.root, bg=self.bg_color, padx=15, pady=15)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title Label
+        title_label = tk.Label(
+            main_frame, 
+            text="📚 Project Gutenberg Book Analyzer",
+            font=('Arial', 16, 'bold'),
+            bg=self.bg_color,
+            fg=self.accent_color
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # Search Section
+        self.create_search_section(main_frame)
+        
+        # Add Book Section
+        self.create_add_book_section(main_frame)
+        
+        # Results Section
+        self.create_results_section(main_frame)
+        
+        # Status Bar
+        self.status_var = tk.StringVar(value="Ready")
+        status_bar = tk.Label(
+            main_frame, 
+            textvariable=self.status_var,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Arial', 9),
+            anchor=tk.W
+        )
+        status_bar.pack(fill=tk.X, pady=(10, 0))
+        
+    def create_search_section(self, parent):
+        """
+        Create the search database section of the GUI.
+        
+        Args:
+            parent: The parent frame to contain this section
+        """
+        # Frame for search section
+        search_frame = tk.LabelFrame(
+            parent, 
+            text="  🔍 Search Local Database  ", 
+            bg=self.bg_color,
+            fg=self.accent_color,
+            font=('Arial', 10, 'bold'),
+            padx=10,
+            pady=10
+        )
+        search_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # Inner frame for better layout
+        inner_frame = tk.Frame(search_frame, bg=self.bg_color)
+        inner_frame.pack(fill=tk.X)
+        
+        # Title label
+        tk.Label(
+            inner_frame, 
+            text="Book Title:",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Arial', 9)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Search entry
+        self.search_entry = tk.Entry(
+            inner_frame, 
+            width=50,
+            bg=self.entry_bg,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Arial', 10)
+        )
+        self.search_entry.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        self.search_entry.bind('<Return>', lambda e: self.search_local_database())
+        
+        # Search button
+        search_btn = tk.Button(
+            inner_frame,
+            text="Search",
+            command=self.search_local_database,
+            bg=self.button_color,
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            padx=20,
+            pady=5,
+            cursor='hand2'
+        )
+        search_btn.pack(side=tk.LEFT)
+    
+    def create_add_book_section(self, parent):
+        """
+        Create the add new book section of the GUI.
+        
+        Args:
+            parent: The parent frame to contain this section
+        """
+        # Frame for add book section
+        add_frame = tk.LabelFrame(
+            parent, 
+            text="  ➕ Add New Book from Project Gutenberg  ", 
+            bg=self.bg_color,
+            fg=self.accent_color,
+            font=('Arial', 10, 'bold'),
+            padx=10,
+            pady=10
+        )
+        add_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # Inner frame
+        inner_frame = tk.Frame(add_frame, bg=self.bg_color)
+        inner_frame.pack(fill=tk.X)
+        
+        # URL label
+        tk.Label(
+            inner_frame, 
+            text="Book URL:",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Arial', 9)
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # URL entry
+        self.url_entry = tk.Entry(
+            inner_frame, 
+            width=50,
+            bg=self.entry_bg,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Arial', 10)
+        )
+        self.url_entry.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        self.url_entry.bind('<Return>', lambda e: self.add_book_from_url())
+        
+        # Add button
+        add_btn = tk.Button(
+            inner_frame,
+            text="Analyze & Add",
+            command=self.add_book_from_url,
+            bg=self.button_color,
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            padx=20,
+            pady=5,
+            cursor='hand2'
+        )
+        add_btn.pack(side=tk.LEFT)
+        
+        # Help text
+        help_label = tk.Label(
+            add_frame,
+            text="Example: https://www.gutenberg.org/cache/epub/37106/pg37106.txt",
+            bg=self.bg_color,
+            fg='#888888',
+            font=('Arial', 8)
+        )
+        help_label.pack(anchor=tk.W, pady=(5, 0))
+    
+    def create_results_section(self, parent):
+        """
+        Create the results display section of the GUI.
+        
+        Args:
+            parent: The parent frame to contain this section
+        """
+        # Frame for results
+        results_frame = tk.LabelFrame(
+            parent, 
+            text="  📊 Analysis Results  ", 
+            bg=self.bg_color,
+            fg=self.accent_color,
+            font=('Arial', 10, 'bold'),
+            padx=10,
+            pady=10
+        )
+        results_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Results text area
+        self.results_text = scrolledtext.ScrolledText(
+            results_frame,
+            wrap=tk.WORD,
+            width=80,
+            height=18,
+            font=('Consolas', 10),
+            bg='#252525',
+            fg='#e0e0e0',
+            insertbackground='#e0e0e0',
+            selectbackground='#404040'
+        )
+        self.results_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Configure text tags for formatting
+        self.results_text.tag_configure('title', font=('Arial', 13, 'bold'), foreground='#14a085')
+        self.results_text.tag_configure('header', font=('Arial', 10, 'bold'), foreground='#0d7377')
+        self.results_text.tag_configure('word', font=('Consolas', 10, 'bold'), foreground='#4fc3f7')
+        self.results_text.tag_configure('error', font=('Arial', 10), foreground='#ff6b6b')
+        
+    def search_local_database(self):
+        """
+        Search the local database for a book title and display word frequencies.
+        Includes fuzzy matching for partial title matches.
+        """
+        title = self.search_entry.get().strip()
+        
+        if not title:
+            messagebox.showwarning("Input Required", "Please enter a book title to search.")
+            return
+        
+        self.status_var.set(f"Searching for '{title}'...")
+        self.root.update()
+        
+        try:
+            # Try exact match first
+            self.cursor.execute(
+                'SELECT * FROM books WHERE LOWER(title) = LOWER(?)',
+                (title,)
+            )
+            result = self.cursor.fetchone()
+            
+            # If no exact match, try partial match
+            if not result:
+                self.cursor.execute(
+                    'SELECT * FROM books WHERE LOWER(title) LIKE LOWER(?)',
+                    (f'%{title}%',)
+                )
+                results = self.cursor.fetchall()
+                
+                if not results:
+                    self.display_not_found(title)
+                    return
+                elif len(results) == 1:
+                    result = results[0]
+                else:
+                    # Multiple matches found
+                    self.show_multiple_matches(results, title)
+                    return
+            
+            # Display the book's word frequencies
+            self.display_book_frequencies(result)
+            
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error searching database: {e}")
+            self.status_var.set("Error occurred")
+    
+    def show_multiple_matches(self, results, search_term):
+        """
+        Display multiple matching books when search is ambiguous.
+        
+        Args:
+            results: List of book records from database
+            search_term: The original search term
+        """
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, f"Multiple books found matching '{search_term}'\n\n", 'title')
+        
+        for i, result in enumerate(results, 1):
+            title = result[1]  # title is at index 1
+            self.results_text.insert(tk.END, f"{i}. ", 'header')
+            self.results_text.insert(tk.END, f"{title}\n", 'word')
+        
+        self.results_text.insert(tk.END, "\nPlease enter a more specific title.", 'header')
+        self.status_var.set(f"Found {len(results)} matching books")
+    
+    def display_book_frequencies(self, book_record):
+        """
+        Display the top 10 word frequencies for a book.
+        
+        Args:
+            book_record: Database record containing book info and word frequencies
+        """
+        # Extract data from record
+        title = book_record[1]
+        
+        # Clear results area
+        self.results_text.delete(1.0, tk.END)
+        
+        # Display title
+        self.results_text.insert(tk.END, f"📖 {title}\n", 'title')
+        self.results_text.insert(tk.END, "=" * 70 + "\n\n", 'header')
+        
+        # Display word frequencies
+        self.results_text.insert(tk.END, "Top 10 Most Frequent Words:\n\n", 'header')
+        self.results_text.insert(tk.END, f"{'Rank':<8}{'Word':<20}{'Frequency':<12}\n", 'header')
+        self.results_text.insert(tk.END, "-" * 45 + "\n")
+        
+        # Extract and display each word-frequency pair
+        for i in range(10):
+            word_index = 2 + (i * 2)
+            freq_index = word_index + 1
+            
+            word = book_record[word_index]
+            freq = book_record[freq_index]
+            
+            if word and freq:
+                self.results_text.insert(tk.END, f"{i+1:<8}", 'header')
+                self.results_text.insert(tk.END, f"{word:<20}", 'word')
+                self.results_text.insert(tk.END, f"{freq:<12}\n")
+        
+        self.status_var.set(f"Successfully loaded '{title}'")
+    
+    def display_not_found(self, title):
+        """
+        Display a message when a book is not found in the database.
+        
+        Args:
+            title: The title that was searched for
+        """
+        self.results_text.delete(1.0, tk.END)
+        self.results_text.insert(tk.END, f"❌ Book Not Found\n\n", 'title')
+        self.results_text.insert(tk.END, f"'{title}' was not found in the local database.\n\n", 'error')
+        self.results_text.insert(
+            tk.END,
+            "To add this book:\n"
+            "1. Find the book on Project Gutenberg (www.gutenberg.org)\n"
+            "2. Copy the plain text URL (ends with .txt)\n"
+            "3. Paste it in the 'Book URL' field above\n"
+            "4. Click 'Analyze & Add Book'\n"
+        )
+        self.status_var.set(f"Book '{title}' not found")
+    
+    def add_book_from_url(self):
+        """
+        Fetch a book from Project Gutenberg, analyze it, and add to database.
+        """
+        url = self.url_entry.get().strip()
+        
+        if not url:
+            messagebox.showwarning("Input Required", "Please enter a book URL.")
+            return
+        
+        if not url.startswith('http'):
+            messagebox.showerror("Invalid URL", "Please enter a valid HTTP/HTTPS URL.")
+            return
+        
+        self.status_var.set("Downloading book...")
+        self.root.update()
+        
+        try:
+            # Download the book text
+            with urllib.request.urlopen(url, timeout=30) as response:
+                text = response.read().decode('utf-8', errors='ignore')
+            
+            self.status_var.set("Analyzing text...")
+            self.root.update()
+            
+            # Extract title
+            title = self.extract_title(text)
+            
+            # Analyze word frequencies
+            word_freq = self.analyze_word_frequency(text)
+            
+            if not word_freq:
+                messagebox.showerror("Analysis Error", "Unable to analyze the book.")
+                self.status_var.set("Analysis failed")
+                return
+            
+            # Save to database
+            save_success = self.save_book_to_database(title, word_freq)
+            
+            # Only show success and display if save was successful
+            if save_success:
+                # Clear URL field
+                self.url_entry.delete(0, tk.END)
+                
+                messagebox.showinfo("Success", f"'{title}' has been added to the database!")
+                
+                # Display the results
+                self.cursor.execute('SELECT * FROM books WHERE title = ?', (title,))
+                result = self.cursor.fetchone()
+                
+                if result:
+                    self.display_book_frequencies(result)
+                else:
+                    messagebox.showerror("Error", "Book was saved but could not be retrieved.")
+            
+        except urllib.error.URLError as e:
+            messagebox.showerror("Network Error", f"Failed to download book:\n{e}")
+            self.status_var.set("Download failed")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred:\n{e}")
+            self.status_var.set("Error occurred")
+    
+    def extract_title(self, text):
+        """
+        Extract the book title from the text content.
+        
+        Args:
+            text: The full text of the book
+            
+        Returns:
+            The extracted book title
+        """
+        # Look for title in first 3000 characters
+        title_match = re.search(r'Title:\s*(.+?)(?:\n|\r)', text[:3000], re.IGNORECASE)
+        
+        if title_match:
+            title = title_match.group(1).strip()
+            title = re.sub(r'\s+', ' ', title)  # Clean up whitespace
+            return title
+        
+        return "Unknown Title"
+    
+    def analyze_word_frequency(self, text):
+        """
+        Analyze word frequencies in the text, filtering out stop words.
+        
+        Args:
+            text: The full text of the book
+            
+        Returns:
+            List of (word, frequency) tuples for top 10 words
+        """
+        # Remove Project Gutenberg header/footer
+        text = self.remove_gutenberg_text(text)
+        
+        # Convert to lowercase and find all words
+        words = re.findall(r'\b[a-z]+\b', text.lower())
+        
+        # Filter out stop words and short words
+        filtered_words = [
+            word for word in words 
+            if word not in self.STOP_WORDS and len(word) > 2
+        ]
+        
+        # Count frequencies and get top 10
+        word_counts = Counter(filtered_words)
+        return word_counts.most_common(10)
+    
+    def remove_gutenberg_text(self, text):
+        """
+        Remove Project Gutenberg header and footer.
+        
+        Args:
+            text: The full text of the book
+            
+        Returns:
+            The book text without header/footer
+        """
+        # Find start of actual content
+        start_match = re.search(r'\*\*\* START OF (THIS|THE) PROJECT GUTENBERG', text, re.IGNORECASE)
+        start_pos = start_match.end() if start_match else 0
+        
+        # Find end of actual content
+        end_match = re.search(r'\*\*\* END OF (THIS|THE) PROJECT GUTENBERG', text[start_pos:], re.IGNORECASE)
+        end_pos = start_pos + end_match.start() if end_match else len(text)
+        
+        return text[start_pos:end_pos]
+    
+    def save_book_to_database(self, title, word_freq):
+        """
+        Save book title and word frequencies to the database.
+        
+        Args:
+            title: The book title
+            word_freq: List of (word, frequency) tuples (top 10)
+        """
+        try:
+            # Prepare data for insertion
+            data = [title]
+            for word, freq in word_freq:
+                data.extend([word, freq])
+            
+            # Pad with None if less than 10 words
+            while len(data) < 21:  # 1 title + 10 word-freq pairs (20 values + 1 title)
+                data.extend([None, None])
+            
+            # Insert or replace book in database
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO books 
+                (title, word1, freq1, word2, freq2, word3, freq3, word4, freq4, 
+                 word5, freq5, word6, freq6, word7, freq7, word8, freq8, 
+                 word9, freq9, word10, freq10)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', data)
+            
+            self.conn.commit()
+            self.status_var.set(f"Successfully saved '{title}'")
+            return True
+            
+        except sqlite3.Error as e:
+            self.conn.rollback()
+            messagebox.showerror("Database Error", f"Failed to save to database: {e}")
+            self.status_var.set("Save failed")
+            return False
+    
+    def __del__(self):
+        """Close database connection when application closes."""
+        try:
+            if hasattr(self, 'conn'):
+                self.conn.close()
+        except:
+            pass
+
+
+def main():
+    """
+    Main function to run the application.
+    Creates the root window and starts the GUI.
+    """
+    root = tk.Tk()
+    app = GutenbergAnalyzer(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
