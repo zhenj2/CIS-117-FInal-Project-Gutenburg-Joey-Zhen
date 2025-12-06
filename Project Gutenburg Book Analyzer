@@ -19,7 +19,7 @@ from collections import Counter
 class GutenbergAnalyzer:
     """
     Main application class for the Project Gutenberg Book Analyzer.
-    Handles GUI creation, database operations, web scraping, and word frequency analysis.
+    Handles GUI creation, database, web scraping, and word frequency count.
     """
     
     # List of common words to filter out
